@@ -4,7 +4,7 @@ Instructions for AI coding agents and contributors working in this repository.
 
 ## What this repo is
 
-A public Terraform registry module (`tx-pts-dai/cloudfront-okta-auth/aws`) that protects an existing CloudFront distribution with Okta OIDC login. A CloudFront Function checks a signed session cookie on every request; a regional Lambda function behind a function URL handles login, callback and logout on `/_auth/*`.
+A public Terraform module (`DND-IT/terraform-aws-cloudfront-okta-auth`, consumed as a `git::` source pinned to a `v<version>` tag; moved from `tx-pts-dai` in 0.2.0) that protects an existing CloudFront distribution with Okta OIDC login. A CloudFront Function checks a signed session cookie on every request; a regional Lambda function behind a function URL handles login, callback and logout on `/_auth/*`.
 
 ## Layout
 

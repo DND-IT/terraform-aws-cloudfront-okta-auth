@@ -18,8 +18,7 @@ The client secret and the session key are written through write-only arguments, 
 
 ```hcl
 module "okta_auth" {
-  source  = "tx-pts-dai/cloudfront-okta-auth/aws"
-  version = "0.2.0"
+  source = "git::https://github.com/DND-IT/terraform-aws-cloudfront-okta-auth.git?ref=v0.2.0"
 
   okta_client_id             = var.okta_client_id
   okta_client_secret         = var.okta_client_secret # ephemeral, never stored in state

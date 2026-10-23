@@ -5,7 +5,7 @@ provider "aws" {
     tags = {
       Terraform  = "true"
       GithubRepo = "terraform-aws-cloudfront-okta-auth"
-      GithubOrg  = "tx-pts-dai"
+      GithubOrg  = "DND-IT"
       Example    = "complete"
     }
   }

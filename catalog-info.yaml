@@ -1,0 +1,17 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: terraform-aws-cloudfront-okta-auth
+  namespace: dnd-it
+  description: Okta OIDC login for a CloudFront distribution (CloudFront Function gate, regional login Lambda)
+  annotations:
+    github.com/project-slug: DND-IT/terraform-aws-cloudfront-okta-auth
+  tags:
+    - terraform
+    - module
+    - aws
+spec:
+  type: library
+  lifecycle: experimental
+  owner: ai-platform
+  system: infrastructure
