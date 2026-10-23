@@ -121,6 +121,40 @@ The session signing key comes from an ephemeral `random_password`. It is written
 
 ## How it works
 
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant G as CloudFront Function<br/>(gate)
+    participant L as Login function<br/>(Lambda function URL)
+    participant O as Okta
+    participant S as Origin
+
+    B->>G: GET /page (no session cookie)
+    G-->>B: 302 /_auth/login?r=/page
+    Note over B,G: Methods other than GET and HEAD get a 401 instead
+
+    B->>G: GET /_auth/login?r=/page
+    G->>L: pass through, add x-okta-auth-host (via OAC)
+    L-->>B: 302 to Okta /authorize with state, nonce, PKCE challenge<br/>Set-Cookie __Host-okta_login (signed, 10 min)
+
+    B->>O: GET /authorize, user signs in
+    O-->>B: 302 /_auth/callback?code=...&state=...
+
+    B->>G: GET /_auth/callback
+    G->>L: pass through
+    L->>L: check state against __Host-okta_login
+    L->>O: POST /token (code, client secret, PKCE verifier)
+    O-->>L: ID token
+    L->>O: GET JWKS (cached for an hour)
+    L->>L: verify RS256 signature, iss, aud, exp, nonce<br/>sign session with the key from SSM
+    L-->>B: 302 /page<br/>Set-Cookie __Host-okta_session, __Secure-okta_id_token
+
+    B->>G: GET /page + __Host-okta_session
+    G->>G: check exp and HMAC against the same key in the KVS
+    G->>S: forward (after viewer_request_rewrite)
+    S-->>B: 200 content
+```
+
 1. The CloudFront Function checks every request.
    - A valid `__Host-okta_session` cookie passes the request on, after the optional `viewer_request_rewrite`.
    - Without one, a GET or HEAD is redirected to `/_auth/login?r=<path>`, and anything else gets a 401.
