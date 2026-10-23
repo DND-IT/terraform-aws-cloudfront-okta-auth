@@ -11,31 +11,12 @@ provider "aws" {
   }
 }
 
-# Lambda@Edge functions must live in us-east-1 regardless of where the site is managed.
-provider "aws" {
-  alias  = "us_east_1"
-  region = "us-east-1"
-
-  default_tags {
-    tags = {
-      Terraform  = "true"
-      GithubRepo = "terraform-aws-cloudfront-okta-auth"
-      GithubOrg  = "tx-pts-dai"
-      Example    = "complete"
-    }
-  }
-}
-
 resource "random_pet" "this" {
   length = 2
 }
 
 module "okta_auth" {
   source = "../../"
-
-  providers = {
-    aws = aws.us_east_1
-  }
 
   name                       = "okta-auth-${random_pet.this.id}"
   okta_client_id             = var.okta_client_id
@@ -85,6 +66,38 @@ resource "aws_s3_bucket_policy" "site" {
   })
 }
 
+resource "aws_cloudfront_origin_access_control" "login" {
+  name                              = "okta-auth-example-login-${random_pet.this.id}"
+  origin_access_control_origin_type = "lambda"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+# CloudFront signs requests to the function URL; both actions are required.
+resource "aws_lambda_permission" "login_url" {
+  statement_id  = "AllowCloudFrontInvokeFunctionUrl"
+  action        = "lambda:InvokeFunctionUrl"
+  function_name = module.okta_auth.lambda_function_name
+  principal     = "cloudfront.amazonaws.com"
+  source_arn    = aws_cloudfront_distribution.site.arn
+}
+
+resource "aws_lambda_permission" "login" {
+  statement_id  = "AllowCloudFrontInvokeFunction"
+  action        = "lambda:InvokeFunction"
+  function_name = module.okta_auth.lambda_function_name
+  principal     = "cloudfront.amazonaws.com"
+  source_arn    = aws_cloudfront_distribution.site.arn
+}
+
+data "aws_cloudfront_cache_policy" "caching_disabled" {
+  name = "Managed-CachingDisabled"
+}
+
+data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
+  name = "Managed-AllViewerExceptHostHeader"
+}
+
 resource "aws_cloudfront_origin_access_control" "site" {
   name                              = "okta-auth-example-${random_pet.this.id}"
   origin_access_control_origin_type = "s3"
@@ -108,6 +121,36 @@ resource "aws_cloudfront_distribution" "site" {
     origin_access_control_id = aws_cloudfront_origin_access_control.site.id
   }
 
+  origin {
+    origin_id                = "login"
+    domain_name              = module.okta_auth.function_url_domain
+    origin_access_control_id = aws_cloudfront_origin_access_control.login.id
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "https-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+
+  # The login endpoints go to the function URL. The gate still runs here: it lets
+  # /_auth/* through and passes the viewer's host on for the OIDC redirect URI.
+  ordered_cache_behavior {
+    path_pattern             = module.okta_auth.auth_path_pattern
+    target_origin_id         = "login"
+    viewer_protocol_policy   = "https-only"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
+    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = module.okta_auth.cloudfront_function_arn
+    }
+  }
+
   default_cache_behavior {
     target_origin_id       = "s3"
     viewer_protocol_policy = "redirect-to-https"
@@ -117,10 +160,9 @@ resource "aws_cloudfront_distribution" "site" {
     compress               = true
 
     # The gate must be attached to every cache behavior, not only the default one.
-    lambda_function_association {
+    function_association {
       event_type   = "viewer-request"
-      lambda_arn   = module.okta_auth.lambda_qualified_arn
-      include_body = false
+      function_arn = module.okta_auth.cloudfront_function_arn
     }
   }
 

@@ -2,7 +2,7 @@ mock_provider "aws" {
   override_data {
     target = data.aws_region.current
     values = {
-      region = "us-east-1"
+      region = "eu-central-1"
     }
   }
 
@@ -78,4 +78,24 @@ run "rejects_long_name" {
   }
 
   expect_failures = [var.name]
+}
+
+run "rejects_short_session_ttl" {
+  command = plan
+
+  variables {
+    session_ttl_seconds = 60
+  }
+
+  expect_failures = [var.session_ttl_seconds]
+}
+
+run "rejects_rewrite_without_function" {
+  command = plan
+
+  variables {
+    viewer_request_rewrite = "request.uri = '/x';"
+  }
+
+  expect_failures = [var.viewer_request_rewrite]
 }
