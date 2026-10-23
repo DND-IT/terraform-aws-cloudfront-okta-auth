@@ -9,13 +9,14 @@ import {
 
 const JWKS_TTL_MS = 60 * 60 * 1000;
 const JWKS_MISS_INTERVAL_MS = 60 * 1000;
-const JWKS_FETCH_TIMEOUT_MS = 2000;
-const TOKEN_FETCH_TIMEOUT_MS = 3000;
+const JWKS_FETCH_TIMEOUT_MS = 3000;
+const TOKEN_FETCH_TIMEOUT_MS = 5000;
 const LOGIN_MAX_AGE_S = 600;
 const MAX_TOKEN_LENGTH = 3900;
 const MAX_RETURN_TO_LENGTH = 2048;
 const AUTH_PREFIX = "/_auth/";
 const SCOPE = "openid email profile";
+const SESSION_VERSION = "v1";
 
 export class AuthError extends Error {
   constructor(status, message, cookies = []) {
@@ -41,16 +42,10 @@ export function safeEqual(a, b) {
   return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
 }
 
-function headerValue(headers, name) {
-  const entries = headers && headers[name];
-  return entries && entries.length > 0 ? entries[0].value : undefined;
-}
-
-export function parseCookies(headers) {
-  const entries = (headers && headers.cookie) || [];
+export function parseCookies(cookieList) {
   const cookies = {};
-  for (const entry of entries) {
-    for (const part of entry.value.split(";")) {
+  for (const entry of cookieList || []) {
+    for (const part of entry.split(";")) {
       const trimmed = part.trim();
       const idx = trimmed.indexOf("=");
       if (idx <= 0) continue;
@@ -62,29 +57,12 @@ export function parseCookies(headers) {
   return cookies;
 }
 
-export function makeCookie(name, value, maxAge) {
-  return `${name}=${value}; Max-Age=${maxAge}; Path=/; Secure; HttpOnly; SameSite=Lax`;
+export function makeCookie(name, value, maxAge, path = "/") {
+  return `${name}=${value}; Max-Age=${maxAge}; Path=${path}; Secure; HttpOnly; SameSite=Lax`;
 }
 
-export function clearCookie(name) {
-  return makeCookie(name, "", 0);
-}
-
-export function stripCookies(headers, names) {
-  const entries = headers.cookie;
-  if (!entries) return headers;
-  const kept = [];
-  for (const entry of entries) {
-    const parts = entry.value
-      .split(";")
-      .map((p) => p.trim())
-      .filter((p) => p && !names.includes(p.slice(0, p.indexOf("=")).trim()));
-    if (parts.length > 0) kept.push({ key: entry.key || "Cookie", value: parts.join("; ") });
-  }
-  const result = { ...headers };
-  if (kept.length > 0) result.cookie = kept;
-  else delete result.cookie;
-  return result;
+export function clearCookie(name, path = "/") {
+  return makeCookie(name, "", 0, path);
 }
 
 export function safeReturnTo(path) {
@@ -111,6 +89,26 @@ export function verifyPayload(key, value) {
   if (!safeEqual(sig, expected)) return null;
   try {
     return JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+export function signSession(key, { exp, ...claims }) {
+  const signed = `${SESSION_VERSION}.${exp}.${b64url(JSON.stringify(claims))}`;
+  return `${signed}.${createHmac("sha256", key).update(signed).digest("base64url")}`;
+}
+
+export function verifySession(key, value, nowSeconds) {
+  if (typeof value !== "string") return null;
+  const parts = value.split(".");
+  if (parts.length !== 4 || parts[0] !== SESSION_VERSION) return null;
+  const expected = createHmac("sha256", key).update(parts.slice(0, 3).join(".")).digest("base64url");
+  if (!safeEqual(parts[3], expected)) return null;
+  const exp = Number(parts[1]);
+  if (!Number.isInteger(exp) || exp <= nowSeconds) return null;
+  try {
+    return { exp, ...JSON.parse(Buffer.from(parts[2], "base64url").toString("utf8")) };
   } catch {
     return null;
   }
@@ -150,72 +148,58 @@ export async function verifyJwt({ token, getKey, issuer, clientId, nonce, nowSec
   return { header, payload };
 }
 
-function baseHeaders(cookies) {
-  const headers = {
-    "cache-control": [{ key: "Cache-Control", value: "no-store" }],
-  };
-  if (cookies.length > 0) headers["set-cookie"] = cookies.map((value) => ({ key: "Set-Cookie", value }));
-  return headers;
-}
-
 export function redirect(location, cookies = []) {
-  const headers = baseHeaders(cookies);
-  headers.location = [{ key: "Location", value: location }];
-  return { status: "302", statusDescription: "Found", headers };
+  return { statusCode: 302, headers: { location, "cache-control": "no-store" }, cookies };
 }
-
-const STATUS_TEXT = {
-  400: "Bad Request",
-  401: "Unauthorized",
-  403: "Forbidden",
-  405: "Method Not Allowed",
-  500: "Internal Server Error",
-  502: "Bad Gateway",
-  503: "Service Unavailable",
-};
 
 export function textResponse(status, message, cookies = []) {
-  const headers = baseHeaders(cookies);
-  headers["content-type"] = [{ key: "Content-Type", value: "text/plain; charset=utf-8" }];
   return {
-    status: String(status),
-    statusDescription: STATUS_TEXT[status] || "Error",
-    headers,
+    statusCode: status,
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+    cookies,
     body: message,
   };
 }
 
-async function fetchSecretFromSsm(config) {
-  const { SSMClient, GetParameterCommand } = await import("@aws-sdk/client-ssm");
-  const client = new SSMClient({ region: config.secret_region });
+async function fetchSecretsFromSsm(config) {
+  const { SSMClient, GetParametersCommand } = await import("@aws-sdk/client-ssm");
+  const client = new SSMClient({});
   const out = await client.send(
-    new GetParameterCommand({ Name: config.secret_parameter_name, WithDecryption: true }),
+    new GetParametersCommand({
+      Names: [config.client_secret_parameter, config.session_key_parameter],
+      WithDecryption: true,
+    }),
   );
-  return out.Parameter.Value;
+  const values = Object.fromEntries((out.Parameters || []).map((p) => [p.Name, p.Value]));
+  const clientSecret = values[config.client_secret_parameter];
+  const sessionKey = values[config.session_key_parameter];
+  if (!clientSecret || !sessionKey) throw new Error("SSM parameters missing");
+  return { clientSecret, sessionKey };
 }
 
 export function createHandler(config, deps = {}) {
   const fetchFn = deps.fetch || globalThis.fetch;
   const now = deps.now || (() => Date.now());
   const random = deps.random || ((n) => randomBytes(n));
-  const getSecret = deps.getSecret || (() => fetchSecretFromSsm(config));
+  const getSecrets = deps.getSecrets || (() => fetchSecretsFromSsm(config));
 
-  let secretPromise = null;
+  let secretsPromise = null;
   const jwks = { keys: new Map(), fetchedAt: 0, missAt: 0 };
 
   function secrets() {
-    if (!secretPromise) {
-      secretPromise = getSecret()
-        .then((secret) => ({
-          secret,
-          signingKey: createHmac("sha256", secret).update("cookie-signing-v1").digest(),
+    if (!secretsPromise) {
+      secretsPromise = getSecrets()
+        .then(({ clientSecret, sessionKey }) => ({
+          clientSecret,
+          sessionKey,
+          loginKey: createHmac("sha256", sessionKey).update("login-cookie-v1").digest(),
         }))
         .catch((err) => {
-          secretPromise = null;
+          secretsPromise = null;
           throw err;
         });
     }
-    return secretPromise;
+    return secretsPromise;
   }
 
   async function fetchJwks() {
@@ -258,31 +242,18 @@ export function createHandler(config, deps = {}) {
     return Math.floor(now() / 1000);
   }
 
-  function verifyIdToken(token, nonce) {
-    return verifyJwt({
-      token,
-      getKey,
-      issuer: config.issuer,
-      clientId: config.client_id,
-      nonce,
-      nowSeconds: nowSeconds(),
-    });
-  }
-
   function callbackUri(host) {
     return `https://${host}${config.callback_path}`;
   }
 
-  async function startLogin(request, host) {
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      throw new AuthError(401, "Authentication required");
-    }
+  async function startLogin(method, host, query) {
+    if (method !== "GET" && method !== "HEAD") throw new AuthError(405, "Method not allowed");
     const state = b64url(random(32));
     const nonce = b64url(random(32));
     const verifier = b64url(random(32));
-    const returnTo = safeReturnTo(request.uri + (request.querystring ? `?${request.querystring}` : ""));
-    const { signingKey } = await secrets();
-    const loginCookie = signPayload(signingKey, { s: state, n: nonce, v: verifier, r: returnTo, t: nowSeconds() });
+    const returnTo = safeReturnTo(query.get("r"));
+    const { loginKey } = await secrets();
+    const loginCookie = signPayload(loginKey, { s: state, n: nonce, v: verifier, r: returnTo, t: nowSeconds() });
     const params = new URLSearchParams({
       client_id: config.client_id,
       redirect_uri: callbackUri(host),
@@ -299,7 +270,7 @@ export function createHandler(config, deps = {}) {
   }
 
   async function exchangeCode({ code, verifier, host }) {
-    const { secret } = await secrets();
+    const { clientSecret } = await secrets();
     const body = new URLSearchParams({
       grant_type: "authorization_code",
       code,
@@ -311,7 +282,7 @@ export function createHandler(config, deps = {}) {
       res = await fetchFn(config.token_endpoint, {
         method: "POST",
         headers: {
-          authorization: `Basic ${Buffer.from(`${config.client_id}:${secret}`).toString("base64")}`,
+          authorization: `Basic ${Buffer.from(`${config.client_id}:${clientSecret}`).toString("base64")}`,
           "content-type": "application/x-www-form-urlencoded",
           accept: "application/json",
         },
@@ -334,18 +305,17 @@ export function createHandler(config, deps = {}) {
     return json.id_token;
   }
 
-  async function handleCallback(request, host, cookies) {
-    if (request.method !== "GET") throw new AuthError(405, "Method not allowed");
+  async function handleCallback(method, host, query, cookies) {
+    if (method !== "GET") throw new AuthError(405, "Method not allowed");
     const clearLogin = clearCookie(config.login_cookie);
-    const query = new URLSearchParams(request.querystring || "");
     if (query.has("error")) {
       const detail = `${query.get("error")}: ${query.get("error_description") || ""}`.slice(0, 200);
       throw new AuthError(403, `Okta rejected the login (${detail})`, [clearLogin]);
     }
     const raw = cookies[config.login_cookie];
     if (!raw) throw new AuthError(400, "Missing login state", [clearLogin]);
-    const { signingKey } = await secrets();
-    const login = verifyPayload(signingKey, raw);
+    const { loginKey, sessionKey } = await secrets();
+    const login = verifyPayload(loginKey, raw);
     if (!login) throw new AuthError(400, "Invalid login state", [clearLogin]);
     if (typeof login.t !== "number" || nowSeconds() - login.t > LOGIN_MAX_AGE_S) {
       throw new AuthError(400, "Login state expired", [clearLogin]);
@@ -358,7 +328,14 @@ export function createHandler(config, deps = {}) {
     const idToken = await exchangeCode({ code, verifier: login.v, host });
     let payload;
     try {
-      ({ payload } = await verifyIdToken(idToken, login.n));
+      ({ payload } = await verifyJwt({
+        token: idToken,
+        getKey,
+        issuer: config.issuer,
+        clientId: config.client_id,
+        nonce: login.n,
+        nowSeconds: nowSeconds(),
+      }));
     } catch (err) {
       if (err instanceof TokenError) {
         console.error("id_token rejected: " + err.message);
@@ -366,52 +343,42 @@ export function createHandler(config, deps = {}) {
       }
       throw err;
     }
-    if (idToken.length > MAX_TOKEN_LENGTH) {
-      throw new AuthError(
-        500,
-        "ID token too large for a session cookie; remove groups or custom claims from the Okta ID token",
-        [clearLogin],
-      );
+    const ttl = config.session_ttl_seconds;
+    const session = signSession(sessionKey, { exp: nowSeconds() + ttl, sub: payload.sub, email: payload.email });
+    const setCookies = [makeCookie(config.session_cookie, session, ttl), clearLogin];
+    if (idToken.length <= MAX_TOKEN_LENGTH) {
+      setCookies.push(makeCookie(config.id_token_cookie, idToken, ttl, AUTH_PREFIX));
     }
-    const maxAge = Math.max(payload.exp - nowSeconds(), 1);
-    return redirect(safeReturnTo(login.r), [makeCookie(config.session_cookie, idToken, maxAge), clearLogin]);
+    return redirect(safeReturnTo(login.r), setCookies);
   }
 
   function handleLogout(host, cookies) {
-    const clear = clearCookie(config.session_cookie);
-    const token = cookies[config.session_cookie];
-    if (!token) return redirect("/", [clear]);
+    const clear = [clearCookie(config.session_cookie), clearCookie(config.id_token_cookie, AUTH_PREFIX)];
+    const token = cookies[config.id_token_cookie];
+    if (!token) return redirect("/", clear);
     const params = new URLSearchParams({
       id_token_hint: token,
       post_logout_redirect_uri: `https://${host}/`,
     });
-    return redirect(`${config.logout_endpoint}?${params}`, [clear]);
+    return redirect(`${config.logout_endpoint}?${params}`, clear);
   }
 
-  async function route(request) {
-    const host = headerValue(request.headers, "host");
-    if (!host) throw new AuthError(400, "Missing Host header");
-    const cookies = parseCookies(request.headers);
-    if (request.uri === config.callback_path) return handleCallback(request, host, cookies);
-    if (request.uri === config.logout_path) return handleLogout(host, cookies);
-
-    const session = cookies[config.session_cookie];
-    if (session) {
-      try {
-        await verifyIdToken(session);
-        request.headers = stripCookies(request.headers, [config.session_cookie, config.login_cookie]);
-        return request;
-      } catch (err) {
-        if (!(err instanceof TokenError)) throw err;
-      }
-    }
-    return startLogin(request, host);
+  async function route(event) {
+    const headers = event.headers || {};
+    const host = headers[config.host_header];
+    if (!host) throw new AuthError(400, "Missing viewer host");
+    const method = event.requestContext.http.method;
+    const query = new URLSearchParams(event.rawQueryString || "");
+    const cookies = parseCookies(event.cookies);
+    if (event.rawPath === config.login_path) return startLogin(method, host, query);
+    if (event.rawPath === config.callback_path) return handleCallback(method, host, query, cookies);
+    if (event.rawPath === config.logout_path) return handleLogout(host, cookies);
+    throw new AuthError(404, "Not found");
   }
 
   return async function handler(event) {
-    const request = event.Records[0].cf.request;
     try {
-      return await route(request);
+      return await route(event);
     } catch (err) {
       if (err instanceof AuthError) return textResponse(err.status, err.message, err.cookies);
       console.error("unhandled auth error: " + (err && err.message));

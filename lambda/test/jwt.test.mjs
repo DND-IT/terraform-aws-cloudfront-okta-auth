@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { b64url, TokenError, verifyJwt } from "../auth.mjs";
-import { claims, config, makeEvent, makeHandler, makeKeyPair, NOW_MS, signJwt } from "./helpers.mjs";
+import { callbackEvent, claims, config, loginCookie, makeHandler, makeKeyPair, NOW_MS, signJwt, tokenRoute } from "./helpers.mjs";
 
 const kp = makeKeyPair();
 const nowSeconds = Math.floor(NOW_MS / 1000);
@@ -55,63 +55,56 @@ test("expiry tolerates 30 seconds of clock skew", async () => {
   await verify(signJwt(kp.privateKey, claims({ exp: nowSeconds - 10 })));
 });
 
-test("JWKS is fetched once and cached across requests", async () => {
-  const { handler, fetch } = makeHandler({ jwk: kp.jwk });
-  const token = signJwt(kp.privateKey, claims());
-  const event = () => makeEvent({ uri: "/page", cookies: [`${config.session_cookie}=${token}`] });
-  const first = await handler(event());
-  const second = await handler(event());
-  assert.equal(first.uri, "/page");
-  assert.equal(second.uri, "/page");
+test("JWKS is fetched once and cached across logins", async () => {
+  const idToken = signJwt(kp.privateKey, claims({ nonce: "nonce1" }));
+  const { handler, fetch } = makeHandler({ jwk: kp.jwk, routes: tokenRoute(idToken) });
+  assert.equal((await handler(callbackEvent())).statusCode, 302);
+  assert.equal((await handler(callbackEvent())).statusCode, 302);
   assert.equal(fetch.calls.filter((c) => c.url === config.jwks_endpoint).length, 1);
 });
 
 test("unknown kid triggers exactly one refetch, rate limited to once per minute", async () => {
   const rotated = makeKeyPair("k2");
   let keys = [kp.jwk];
+  const rotatedToken = signJwt(rotated.privateKey, claims({ nonce: "nonce1" }), { kid: "k2" });
   const { handler, fetch, clock } = makeHandler({
-    routes: { [config.jwks_endpoint]: () => ({ status: 200, body: { keys } }) },
+    routes: { ...tokenRoute(rotatedToken), [config.jwks_endpoint]: () => ({ status: 200, body: { keys } }) },
   });
-  const rotatedToken = signJwt(rotated.privateKey, claims(), { kid: "k2" });
-  const event = () => makeEvent({ uri: "/page", cookies: [`${config.session_cookie}=${rotatedToken}`] });
+  const jwksCalls = () => fetch.calls.filter((c) => c.url === config.jwks_endpoint).length;
 
-  const beforeRotation = await handler(event());
-  assert.equal(beforeRotation.status, "302");
-  assert.equal(fetch.calls.length, 2);
+  assert.equal((await handler(callbackEvent())).statusCode, 401);
+  assert.equal(jwksCalls(), 2);
 
-  const againWithinMinute = await handler(event());
-  assert.equal(againWithinMinute.status, "302");
-  assert.equal(fetch.calls.length, 2);
+  assert.equal((await handler(callbackEvent())).statusCode, 401);
+  assert.equal(jwksCalls(), 2);
 
   keys = [kp.jwk, rotated.jwk];
   clock.ms += 61_000;
-  const afterRotation = await handler(event());
-  assert.equal(afterRotation.uri, "/page");
-  assert.equal(fetch.calls.length, 3);
+  assert.equal((await handler(callbackEvent())).statusCode, 302);
+  assert.equal(jwksCalls(), 3);
 });
 
 test("JWKS cache is refreshed after one hour", async () => {
-  const { handler, fetch, clock } = makeHandler({ jwk: kp.jwk });
-  const token = signJwt(kp.privateKey, claims({ exp: nowSeconds + 10_000 }));
-  const event = () => makeEvent({ uri: "/page", cookies: [`${config.session_cookie}=${token}`] });
-  await handler(event());
+  const idToken = signJwt(kp.privateKey, claims({ nonce: "nonce1", exp: nowSeconds + 10_000 }));
+  const { handler, fetch, clock } = makeHandler({ jwk: kp.jwk, routes: tokenRoute(idToken) });
+  await handler(callbackEvent());
   clock.ms += 3_600_001;
-  await handler(event());
+  await handler(callbackEvent({ cookie: loginCookie({ t: nowSeconds + 3600 }) }));
   assert.equal(fetch.calls.filter((c) => c.url === config.jwks_endpoint).length, 2);
 });
 
 test("JWKS refresh failure keeps the cached keys", async () => {
   let fail = false;
+  const idToken = signJwt(kp.privateKey, claims({ nonce: "nonce1", exp: nowSeconds + 10_000 }));
   const { handler, clock } = makeHandler({
     routes: {
+      ...tokenRoute(idToken),
       [config.jwks_endpoint]: () => (fail ? { status: 500, body: {} } : { status: 200, body: { keys: [kp.jwk] } }),
     },
   });
-  const token = signJwt(kp.privateKey, claims({ exp: nowSeconds + 10_000 }));
-  const event = () => makeEvent({ uri: "/page", cookies: [`${config.session_cookie}=${token}`] });
-  await handler(event());
+  await handler(callbackEvent());
   fail = true;
   clock.ms += 3_600_001;
-  const res = await handler(event());
-  assert.equal(res.uri, "/page");
+  const res = await handler(callbackEvent({ cookie: loginCookie({ t: nowSeconds + 3600 }) }));
+  assert.equal(res.statusCode, 302);
 });
