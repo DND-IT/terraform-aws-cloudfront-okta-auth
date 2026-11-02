@@ -74,6 +74,17 @@ variable "viewer_request_rewrite" {
   }
 }
 
+variable "groups_table_arn" {
+  description = "ARN of a DynamoDB table, keyed on the string attribute email, that records each user's groups at sign-in. When set, the login asks Okta for the groups scope and writes one item per user: email (lower-cased), sub, groups (a list of the ID token's group names) and updated_at. The groups claim must be configured on the Okta application. A failed write is logged and does not block the sign-in."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.groups_table_arn == null || can(regex("^arn:aws[a-z-]*:dynamodb:[a-z0-9-]+:[0-9]{12}:table/[a-zA-Z0-9_.-]{3,255}$", var.groups_table_arn))
+    error_message = "groups_table_arn must be a DynamoDB table ARN."
+  }
+}
+
 variable "name" {
   description = "Name of the CloudFront Function, key value store, login Lambda function, IAM role and SSM parameter prefix."
   type        = string
