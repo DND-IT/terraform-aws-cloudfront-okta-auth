@@ -110,6 +110,19 @@ Assign the users or groups that may access the site to the application. Okta rej
 - Org authorization server: `https://acme.okta.com` (endpoints under `https://acme.okta.com/oauth2/v1/`)
 - Custom authorization server: `https://acme.okta.com/oauth2/default` (endpoints under the issuer)
 
+### Recording users' groups
+
+Set `groups_table_arn` to a DynamoDB table with the string partition key `email`, and the login asks Okta for the `groups` scope and writes one item per user on every sign-in:
+
+| Attribute | Value |
+| --- | --- |
+| `email` | the ID token's `email`, lower-cased |
+| `sub` | the ID token's `sub` |
+| `groups` | list of the group names in the ID token's `groups` claim, empty when it has none |
+| `updated_at` | ISO 8601 time of the sign-in |
+
+The item reflects the groups at the user's last sign-in, and only users who sign in appear. The application must be allowed the `groups` scope and, on a custom authorization server, have a `groups` claim. The groups stay out of the session cookie. A failed write is logged and the sign-in goes ahead.
+
 ## Handling the secrets
 
 `okta_client_secret` is declared `ephemeral`, and the module writes it to SSM with the provider's write-only `value_wo` argument. Terraform discards the value after the operation: it is not in the plan file, not in the state, and not visible in `terraform show`.
@@ -288,6 +301,7 @@ No modules.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| <a name="input_groups_table_arn"></a> [groups\_table\_arn](#input\_groups\_table\_arn) | ARN of a DynamoDB table, keyed on the string attribute email, that records each user's groups at sign-in. When set, the login asks Okta for the groups scope and writes one item per user: email (lower-cased), sub, groups (a list of the ID token's group names) and updated\_at. The groups claim must be configured on the Okta application. A failed write is logged and does not block the sign-in. | `string` | `null` | no |
 | <a name="input_name"></a> [name](#input\_name) | Name of the CloudFront Function, key value store, login Lambda function, IAM role and SSM parameter prefix. | `string` | `"cloudfront-okta-auth"` | no |
 | <a name="input_okta_client_id"></a> [okta\_client\_id](#input\_okta\_client\_id) | Client ID of the Okta OIDC web application. | `string` | n/a | yes |
 | <a name="input_okta_client_secret"></a> [okta\_client\_secret](#input\_okta\_client\_secret) | Client secret of the Okta OIDC web application. Ephemeral: written to an SSM SecureString parameter and never stored in state or plan. Bump okta\_client\_secret\_version to rotate it. | `string` | n/a | yes |

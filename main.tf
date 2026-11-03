@@ -13,6 +13,7 @@ locals {
   session_key_name = "session_key"
   secret_param     = "/${var.name}/okta-client-secret"
   session_param    = "/${var.name}/session-key"
+  groups_table     = var.groups_table_arn == null ? null : split("/", var.groups_table_arn)[1]
 
   okta_endpoints = {
     authorize = "${local.okta_base}/v1/authorize"
@@ -38,6 +39,7 @@ locals {
     id_token_cookie         = "__Secure-okta_id_token"
     session_ttl_seconds     = var.session_ttl_seconds
     host_header             = local.host_header
+    groups_table            = local.groups_table
   }
 
   gate_config = {
@@ -131,7 +133,7 @@ resource "aws_iam_role_policy" "login" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect = "Allow"
         Action = [
@@ -149,7 +151,13 @@ resource "aws_iam_role_policy" "login" {
           "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${param}"
         ]
       },
-    ]
+      ], var.groups_table_arn == null ? [] : [
+      {
+        Effect   = "Allow"
+        Action   = "dynamodb:PutItem"
+        Resource = var.groups_table_arn
+      },
+    ])
   })
 }
 

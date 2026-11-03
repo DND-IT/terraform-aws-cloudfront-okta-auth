@@ -177,11 +177,28 @@ async function fetchSecretsFromSsm(config) {
   return { clientSecret, sessionKey };
 }
 
+async function putUserGroups(config, { email, sub, groups, updatedAt }) {
+  const { DynamoDBClient, PutItemCommand } = await import("@aws-sdk/client-dynamodb");
+  await new DynamoDBClient({}).send(
+    new PutItemCommand({
+      TableName: config.groups_table,
+      Item: {
+        email: { S: email },
+        sub: { S: sub },
+        groups: { L: groups.map((group) => ({ S: group })) },
+        updated_at: { S: updatedAt },
+      },
+    }),
+  );
+}
+
 export function createHandler(config, deps = {}) {
   const fetchFn = deps.fetch || globalThis.fetch;
   const now = deps.now || (() => Date.now());
   const random = deps.random || ((n) => randomBytes(n));
   const getSecrets = deps.getSecrets || (() => fetchSecretsFromSsm(config));
+  const recordGroups = deps.recordGroups || ((record) => putUserGroups(config, record));
+  const scope = config.groups_table ? `${SCOPE} groups` : SCOPE;
 
   let secretsPromise = null;
   const jwks = { keys: new Map(), fetchedAt: 0, missAt: 0 };
@@ -258,7 +275,7 @@ export function createHandler(config, deps = {}) {
       client_id: config.client_id,
       redirect_uri: callbackUri(host),
       response_type: "code",
-      scope: SCOPE,
+      scope,
       state,
       nonce,
       code_challenge: b64url(sha256(verifier)),
@@ -305,6 +322,21 @@ export function createHandler(config, deps = {}) {
     return json.id_token;
   }
 
+  async function saveGroups(payload) {
+    if (typeof payload.email !== "string") return;
+    const groups = Array.isArray(payload.groups) ? payload.groups.filter((g) => typeof g === "string") : [];
+    try {
+      await recordGroups({
+        email: payload.email.toLowerCase(),
+        sub: String(payload.sub),
+        groups,
+        updatedAt: new Date(now()).toISOString(),
+      });
+    } catch (err) {
+      console.error("recording user groups failed: " + (err && err.message));
+    }
+  }
+
   async function handleCallback(method, host, query, cookies) {
     if (method !== "GET") throw new AuthError(405, "Method not allowed");
     const clearLogin = clearCookie(config.login_cookie);
@@ -343,6 +375,7 @@ export function createHandler(config, deps = {}) {
       }
       throw err;
     }
+    if (config.groups_table) await saveGroups(payload);
     const ttl = config.session_ttl_seconds;
     const session = signSession(sessionKey, { exp: nowSeconds() + ttl, sub: payload.sub, email: payload.email });
     const setCookies = [makeCookie(config.session_cookie, session, ttl), clearLogin];

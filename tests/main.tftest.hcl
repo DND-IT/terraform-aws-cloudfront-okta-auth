@@ -237,3 +237,34 @@ run "custom_name" {
     error_message = "name must be applied to the functions, key value store, role and parameters"
   }
 }
+
+run "groups_table_unset" {
+  command = plan
+
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.login.policy, "dynamodb:")
+    error_message = "Without a groups table the login function needs no DynamoDB access"
+  }
+}
+
+run "groups_table_set" {
+  command = plan
+
+  variables {
+    groups_table_arn = "arn:aws:dynamodb:eu-central-1:123456789012:table/user-groups"
+  }
+
+  assert {
+    condition = contains(jsondecode(aws_iam_role_policy.login.policy).Statement, {
+      Effect   = "Allow"
+      Action   = "dynamodb:PutItem"
+      Resource = "arn:aws:dynamodb:eu-central-1:123456789012:table/user-groups"
+    })
+    error_message = "The login function must be allowed to write the groups table and nothing else in DynamoDB"
+  }
+
+  assert {
+    condition     = local.lambda_config.groups_table == "user-groups"
+    error_message = "The login function must be given the table name"
+  }
+}

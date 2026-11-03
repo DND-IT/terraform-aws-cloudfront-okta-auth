@@ -99,3 +99,13 @@ run "rejects_rewrite_without_function" {
 
   expect_failures = [var.viewer_request_rewrite]
 }
+
+run "rejects_a_groups_table_that_is_not_an_arn" {
+  command = plan
+
+  variables {
+    groups_table_arn = "user-groups"
+  }
+
+  expect_failures = [var.groups_table_arn]
+}

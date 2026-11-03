@@ -77,15 +77,16 @@ export function fakeFetch(routes) {
   return fn;
 }
 
-export function makeHandler({ jwk, routes = {}, now, random, getSecrets } = {}) {
+export function makeHandler({ jwk, routes = {}, now, random, getSecrets, recordGroups, overrides = {} } = {}) {
   const clock = { ms: NOW_MS };
   const fetch = fakeFetch({
     [config.jwks_endpoint]: { status: 200, body: { keys: jwk ? [jwk] : [] } },
     ...routes,
   });
   let counter = 0;
-  const handler = createHandler(config, {
+  const handler = createHandler({ ...config, ...overrides }, {
     fetch,
+    recordGroups,
     now: now || (() => clock.ms),
     random: random || ((n) => Buffer.alloc(n, ++counter)),
     getSecrets: getSecrets || (async () => ({ clientSecret: CLIENT_SECRET, sessionKey: SESSION_KEY })),
