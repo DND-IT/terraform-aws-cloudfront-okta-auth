@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0](https://github.com/DND-IT/terraform-aws-cloudfront-okta-auth/compare/v0.2.0...v0.3.0) (2026-11-03)
+
+### Features
+
+* record users' groups in DynamoDB at sign-in ([#4](https://github.com/DND-IT/terraform-aws-cloudfront-okta-auth/issues/4)) ([f71db17](https://github.com/DND-IT/terraform-aws-cloudfront-okta-auth/commit/f71db1775bab96efca9b81556b9c6ec46585e718))
+
 ## [0.2.0](https://github.com/DND-IT/terraform-aws-cloudfront-okta-auth/compare/v0.1.0...v0.2.0) (2026-10-23)
 
 ### ⚠ BREAKING CHANGES
