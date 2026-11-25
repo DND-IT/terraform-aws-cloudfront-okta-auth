@@ -152,12 +152,83 @@ export function redirect(location, cookies = []) {
   return { statusCode: 302, headers: { location, "cache-control": "no-store" }, cookies };
 }
 
-export function textResponse(status, message, cookies = []) {
+const ERROR_COPY = {
+  400: ["Sign-in did not finish", "The sign-in timed out or was started in another tab. Sign in again."],
+  401: ["Sign-in could not be verified", "Okta's answer could not be verified. Sign in again."],
+  403: [
+    "Okta did not let you in",
+    "Your account may not be assigned to this site's Okta application. Ask the site's owner for access, then sign in again.",
+  ],
+  404: ["Page not found", "There is nothing at this address."],
+  405: ["Method not allowed", "Open this address in a browser."],
+};
+const ERROR_COPY_UNAVAILABLE = ["Sign-in is unavailable", "Sign-in is not working right now. Try again in a minute."];
+const ERROR_COPY_FALLBACK = ["Sign-in failed", "Sign in again."];
+
+const ERROR_PAGE_CSS = `
+:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--text:#1b2030;--muted:#5a6377;--line:#e2e5eb;--accent:#2f5bd3;--on-accent:#fff;--well:#f1f3f6;--badge:#fdecec;--badge-text:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1014;--card:#171a20;--text:#e7e9ee;--muted:#9aa2b3;--line:#2a2f39;--accent:#7096ff;--on-accent:#0e1014;--well:#1f232b;--badge:#3a1d1d;--badge-text:#ffb4ab}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px 16px;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{width:100%;max-width:480px;padding:32px;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 1px 2px rgb(0 0 0/.04),0 8px 24px rgb(0 0 0/.06)}
+.badge{display:inline-block;margin:0 0 16px;padding:2px 10px;border-radius:999px;background:var(--badge);color:var(--badge-text);font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+h1{margin:0 0 8px;font-size:22px;line-height:1.3;letter-spacing:-.01em}
+p{margin:0 0 20px;color:var(--muted)}
+code{display:block;margin:0 0 24px;padding:12px 14px;border-radius:10px;background:var(--well);color:var(--text);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-wrap:anywhere}
+nav{display:flex;flex-wrap:wrap;gap:12px}
+a{padding:10px 18px;border:1px solid var(--line);border-radius:10px;color:var(--text);font-weight:600;text-decoration:none}
+a:hover{background:var(--well)}
+a.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+a.primary:hover{filter:brightness(1.08)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+`;
+const ERROR_PAGE_CSP = [
+  "default-src 'none'",
+  `style-src 'sha256-${createHash("sha256").update(ERROR_PAGE_CSS).digest("base64")}'`,
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+export function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+export function errorPage(status, message, loginPath, cookies = []) {
+  const [title, hint] = ERROR_COPY[status] || (status >= 500 ? ERROR_COPY_UNAVAILABLE : ERROR_COPY_FALLBACK);
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${escapeHtml(title)}</title>
+<style>${ERROR_PAGE_CSS}</style>
+</head>
+<body>
+<main>
+<span class="badge">Error ${status}</span>
+<h1>${escapeHtml(title)}</h1>
+<p>${escapeHtml(hint)}</p>
+<code>${escapeHtml(message)}</code>
+<nav>
+<a class="primary" href="${escapeHtml(loginPath)}">Sign in again</a>
+<a href="/">Home</a>
+</nav>
+</main>
+</body>
+</html>
+`;
   return {
     statusCode: status,
-    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "content-security-policy": ERROR_PAGE_CSP,
+      "x-content-type-options": "nosniff",
+    },
     cookies,
-    body: message,
+    body,
   };
 }
 
@@ -413,9 +484,9 @@ export function createHandler(config, deps = {}) {
     try {
       return await route(event);
     } catch (err) {
-      if (err instanceof AuthError) return textResponse(err.status, err.message, err.cookies);
+      if (err instanceof AuthError) return errorPage(err.status, err.message, config.login_path, err.cookies);
       console.error("unhandled auth error: " + (err && err.message));
-      return textResponse(500, "Authentication error");
+      return errorPage(500, "Authentication error", config.login_path);
     }
   };
 }

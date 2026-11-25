@@ -62,7 +62,7 @@ test("HEAD is redirected like GET, other methods get 405", async () => {
   assert.equal((await handler(makeEvent({ method: "HEAD" }))).statusCode, 302);
   const post = await handler(makeEvent({ method: "POST" }));
   assert.equal(post.statusCode, 405);
-  assert.equal(post.headers["content-type"], "text/plain; charset=utf-8");
+  assert.equal(post.headers["content-type"], "text/html; charset=utf-8");
 });
 
 test("secret fetch failure is retried on the next request", async () => {
