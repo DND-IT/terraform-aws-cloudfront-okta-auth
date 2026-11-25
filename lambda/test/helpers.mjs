@@ -1,4 +1,5 @@
 import { createHmac, generateKeyPairSync, sign } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { b64url, createHandler, signPayload } from "../auth.mjs";
 
 export const config = {
@@ -18,6 +19,7 @@ export const config = {
   id_token_cookie: "__Secure-okta_id_token",
   session_ttl_seconds: 28800,
   host_header: "x-okta-auth-host",
+  error_page_template: readFileSync(new URL("../error-page.html", import.meta.url), "utf8"),
 };
 
 export const CLIENT_SECRET = "s3cret";

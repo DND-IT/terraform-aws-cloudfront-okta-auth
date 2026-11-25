@@ -208,6 +208,29 @@ The module's `removed` blocks make Terraform forget the old resources instead of
 
 Delete them by hand once the distribution has finished deploying and the replicas are gone. Existing sessions are signed out once.
 
+## Error page
+
+When a sign-in fails, for example because Okta answers `access_denied` for a user who is not assigned to the application, the login function serves an HTML page with the status, a plain-English explanation, Okta's error and a link to sign in again. The default is [`lambda/error-page.html`](lambda/error-page.html). Pass your own HTML in `error_page_template` to replace it:
+
+```hcl
+module "okta_auth" {
+  # ...
+  error_page_template = file("${path.module}/error-page.html")
+}
+```
+
+These placeholders are replaced with HTML-escaped values:
+
+| Placeholder | Value |
+|---|---|
+| `{{status}}` | HTTP status, such as `403` |
+| `{{title}}` | Short heading, such as `Okta did not let you in` |
+| `{{hint}}` | What the user can do next |
+| `{{message}}` | The error itself, including Okta's `error` and `error_description` |
+| `{{login_path}}` | `/_auth/login`, to link a fresh sign-in |
+
+The page is sent with a Content-Security-Policy built from it: `default-src 'none'`, a hash for each `<style>` element and `img-src data:`. Keep it self-contained: CSS in `<style>` elements (not `style` attributes, and with no placeholders inside them), images as `data:` URIs, no scripts, and nothing loaded from the protected site, which the user cannot reach yet.
+
 ## Examples
 
 - [complete](examples/complete): private S3 bucket, S3 origin access control, CloudFront distribution and this module, with outputs listing the URIs to register in Okta.
@@ -301,6 +324,7 @@ No modules.
 
 | Name | Description | Type | Default | Required |
 | ---- | ----------- | ---- | ------- | :------: |
+| <a name="input_error_page_template"></a> [error\_page\_template](#input\_error\_page\_template) | HTML of the page the login function serves when sign-in fails, in place of the module's own (lambda/error-page.html). {{status}}, {{title}}, {{hint}}, {{message}} and {{login\_path}} are replaced with HTML-escaped values. The page is served with a Content-Security-Policy that allows only its own style elements and data: images, so keep it self-contained: no scripts, no style attributes, no placeholders inside a style element, and nothing loaded from the protected site. See the Error page section of the README. | `string` | `null` | no |
 | <a name="input_groups_table_arn"></a> [groups\_table\_arn](#input\_groups\_table\_arn) | ARN of a DynamoDB table, keyed on the string attribute email, that records each user's groups at sign-in. When set, the login asks Okta for the groups scope and writes one item per user: email (lower-cased), sub, groups (a list of the ID token's group names) and updated\_at. The groups claim must be configured on the Okta application. A failed write is logged and does not block the sign-in. | `string` | `null` | no |
 | <a name="input_name"></a> [name](#input\_name) | Name of the CloudFront Function, key value store, login Lambda function, IAM role and SSM parameter prefix. | `string` | `"cloudfront-okta-auth"` | no |
 | <a name="input_okta_client_id"></a> [okta\_client\_id](#input\_okta\_client\_id) | Client ID of the Okta OIDC web application. | `string` | n/a | yes |
