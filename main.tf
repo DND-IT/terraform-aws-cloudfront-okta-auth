@@ -40,6 +40,7 @@ locals {
     session_ttl_seconds     = var.session_ttl_seconds
     host_header             = local.host_header
     groups_table            = local.groups_table
+    error_page_template     = coalesce(var.error_page_template, file("${path.module}/lambda/error-page.html"))
   }
 
   gate_config = {

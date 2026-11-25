@@ -9,7 +9,7 @@ A public Terraform module (`DND-IT/terraform-aws-cloudfront-okta-auth`, consumed
 ## Layout
 
 - `main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`: the module. The login function and its SSM parameters live in the caller's region; the CloudFront Function and key value store are global.
-- `lambda/auth.mjs`: the login function's OIDC, JWT and cookie logic, zero npm dependencies. `lambda/index.mjs` is its entrypoint and `lambda/config.mjs.tftpl` its only templated file.
+- `lambda/auth.mjs`: the login function's OIDC, JWT and cookie logic, zero npm dependencies. `lambda/index.mjs` is its entrypoint and `lambda/config.mjs.tftpl` its only templated file. `lambda/error-page.html` is the default `error_page_template`, passed in through the config.
 - `lambda/gate.js`: the CloudFront Function body (`cloudfront-js-2.0`: no network, no `Buffer`, no timers). `lambda/gate.js.tftpl` prepends the KVS handle, `crypto` and the config and embeds `viewer_request_rewrite`.
 - `scripts/put-session-key.sh`: writes the session key into the key value store; the provider has no write-only argument for it.
 - `lambda/test/`: `node --test` unit tests; `gate.test.mjs` runs `gate.js` in a `node:vm` context with stand-ins for the CloudFront globals.

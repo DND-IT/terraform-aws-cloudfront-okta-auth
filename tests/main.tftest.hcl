@@ -268,3 +268,25 @@ run "groups_table_set" {
     error_message = "The login function must be given the table name"
   }
 }
+
+run "default_error_page" {
+  command = plan
+
+  assert {
+    condition     = local.lambda_config.error_page_template == file("lambda/error-page.html")
+    error_message = "Without error_page_template the login function must serve the module's own page"
+  }
+}
+
+run "custom_error_page" {
+  command = plan
+
+  variables {
+    error_page_template = "<p>{{message}}</p>"
+  }
+
+  assert {
+    condition     = local.lambda_config.error_page_template == "<p>{{message}}</p>"
+    error_message = "error_page_template must replace the module's own page"
+  }
+}

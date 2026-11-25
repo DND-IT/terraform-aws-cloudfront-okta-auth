@@ -152,13 +152,42 @@ export function redirect(location, cookies = []) {
   return { statusCode: 302, headers: { location, "cache-control": "no-store" }, cookies };
 }
 
-export function textResponse(status, message, cookies = []) {
-  return {
-    statusCode: status,
-    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
-    cookies,
-    body: message,
-  };
+const ERROR_COPY = {
+  400: ["Sign-in did not finish", "The sign-in timed out or was started in another tab. Sign in again."],
+  401: ["Sign-in could not be verified", "Okta's answer could not be verified. Sign in again."],
+  403: [
+    "Okta did not let you in",
+    "Your account may not be assigned to this site's Okta application. Ask the site's owner for access, then sign in again.",
+  ],
+  404: ["Page not found", "There is nothing at this address."],
+  405: ["Method not allowed", "Open this address in a browser."],
+};
+const ERROR_COPY_UNAVAILABLE = ["Sign-in is unavailable", "Sign-in is not working right now. Try again in a minute."];
+const ERROR_COPY_FALLBACK = ["Sign-in failed", "Sign in again."];
+
+const ERROR_PAGE_PLACEHOLDER = /\{\{(status|title|hint|message|login_path)\}\}/g;
+const STYLE_ELEMENT = /<style\b[^>]*>([\s\S]*?)<\/style>/gi;
+
+export function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+export function errorPageCsp(template) {
+  const hashes = [...template.matchAll(STYLE_ELEMENT)].map(
+    ([, css]) => `'sha256-${createHash("sha256").update(css).digest("base64")}'`,
+  );
+  return [
+    "default-src 'none'",
+    ...(hashes.length > 0 ? [`style-src ${hashes.join(" ")}`] : []),
+    "img-src data:",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+export function renderErrorPage(template, values) {
+  return template.replace(ERROR_PAGE_PLACEHOLDER, (_, name) => escapeHtml(values[name]));
 }
 
 async function fetchSecretsFromSsm(config) {
@@ -199,6 +228,7 @@ export function createHandler(config, deps = {}) {
   const getSecrets = deps.getSecrets || (() => fetchSecretsFromSsm(config));
   const recordGroups = deps.recordGroups || ((record) => putUserGroups(config, record));
   const scope = config.groups_table ? `${SCOPE} groups` : SCOPE;
+  const errorCsp = errorPageCsp(config.error_page_template);
 
   let secretsPromise = null;
   const jwks = { keys: new Map(), fetchedAt: 0, missAt: 0 };
@@ -253,6 +283,21 @@ export function createHandler(config, deps = {}) {
       }
     }
     return jwks.keys.get(kid) || null;
+  }
+
+  function errorPage(status, message, cookies = []) {
+    const [title, hint] = ERROR_COPY[status] || (status >= 500 ? ERROR_COPY_UNAVAILABLE : ERROR_COPY_FALLBACK);
+    return {
+      statusCode: status,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "content-security-policy": errorCsp,
+        "x-content-type-options": "nosniff",
+      },
+      cookies,
+      body: renderErrorPage(config.error_page_template, { status, title, hint, message, login_path: config.login_path }),
+    };
   }
 
   function nowSeconds() {
@@ -413,9 +458,9 @@ export function createHandler(config, deps = {}) {
     try {
       return await route(event);
     } catch (err) {
-      if (err instanceof AuthError) return textResponse(err.status, err.message, err.cookies);
+      if (err instanceof AuthError) return errorPage(err.status, err.message, err.cookies);
       console.error("unhandled auth error: " + (err && err.message));
-      return textResponse(500, "Authentication error");
+      return errorPage(500, "Authentication error");
     }
   };
 }

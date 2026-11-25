@@ -74,6 +74,12 @@ variable "viewer_request_rewrite" {
   }
 }
 
+variable "error_page_template" {
+  description = "HTML of the page the login function serves when sign-in fails, in place of the module's own (lambda/error-page.html). {{status}}, {{title}}, {{hint}}, {{message}} and {{login_path}} are replaced with HTML-escaped values. The page is served with a Content-Security-Policy that allows only its own style elements and data: images, so keep it self-contained: no scripts, no style attributes, no placeholders inside a style element, and nothing loaded from the protected site. See the Error page section of the README."
+  type        = string
+  default     = null
+}
+
 variable "groups_table_arn" {
   description = "ARN of a DynamoDB table, keyed on the string attribute email, that records each user's groups at sign-in. When set, the login asks Okta for the groups scope and writes one item per user: email (lower-cased), sub, groups (a list of the ID token's group names) and updated_at. The groups claim must be configured on the Okta application. A failed write is logged and does not block the sign-in."
   type        = string
