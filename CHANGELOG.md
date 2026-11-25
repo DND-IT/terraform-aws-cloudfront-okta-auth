@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0](https://github.com/DND-IT/terraform-aws-cloudfront-okta-auth/compare/v0.3.0...v0.4.0) (2026-11-25)
+
+### Features
+
+* render auth errors as a customisable HTML page ([#8](https://github.com/DND-IT/terraform-aws-cloudfront-okta-auth/issues/8)) ([4b4a379](https://github.com/DND-IT/terraform-aws-cloudfront-okta-auth/commit/4b4a3791fc9552f8f0eaf032c9a562fd4908c8ad))
+
 ## [0.3.0](https://github.com/DND-IT/terraform-aws-cloudfront-okta-auth/compare/v0.2.0...v0.3.0) (2026-11-03)
 
 ### Features
